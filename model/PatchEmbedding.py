@@ -37,6 +37,8 @@ class PatchEmbeddingBlock(nn.Module):
             raise ValueError("hidden size should be divisible by num_heads.")
 
         self.pos_embed = look_up_option(pos_embed, SUPPORTED_EMBEDDING_TYPES)
+        self.hidden_size = hidden_size
+        self.patch_size = ensure_tuple_rep(patch_size, spatial_dims)
 
         img_size = ensure_tuple_rep(img_size, spatial_dims)
         patch_size = ensure_tuple_rep(patch_size, spatial_dims)
@@ -45,30 +47,37 @@ class PatchEmbeddingBlock(nn.Module):
                 raise ValueError("patch_size should be smaller than img_size.")
             if self.pos_embed == "perceptron" and m % p != 0:
                 raise ValueError("patch_size should be divisible by img_size for perceptron.")
-        self.n_patches = np.prod([im_d // p_d for im_d, p_d in zip(img_size, patch_size)])
+        self.n_patches = int(np.prod([im_d // p_d for im_d, p_d in zip(img_size, patch_size)]))
         self.patch_dim = int(in_channels * np.prod(patch_size))
+        self.spatial_dims = spatial_dims
 
         self.patch_embeddings: nn.Module
         if self.pos_embed == "conv":
             self.patch_embeddings = Conv[Conv.CONV, spatial_dims](
-                in_channels=in_channels, out_channels=hidden_size, kernel_size=patch_size, stride=patch_size
+                in_channels=in_channels, out_channels=hidden_size,
+                kernel_size=patch_size, stride=patch_size
             )
         elif self.pos_embed == "perceptron":
-            # for 3d: "b c (h p1) (w p2) (d p3)-> b (h w d) (p1 p2 p3 c)"
             chars = (("h", "p1"), ("w", "p2"), ("d", "p3"))[:spatial_dims]
             from_chars = "b c " + " ".join(f"({k} {v})" for k, v in chars)
             to_chars = f"b ({' '.join([c[0] for c in chars])}) ({' '.join([c[1] for c in chars])} c)"
             axes_len = {f"p{i + 1}": p for i, p in enumerate(patch_size)}
             self.patch_embeddings = nn.Sequential(
-                Rearrange(f"{from_chars} -> {to_chars}", **axes_len), nn.Linear(self.patch_dim, hidden_size)
+                Rearrange(f"{from_chars} -> {to_chars}", **axes_len),
+                nn.Linear(self.patch_dim, hidden_size)
             )
-        self.position_embeddings_8 = nn.Parameter(torch.zeros(1, 37, hidden_size))
-        self.position_embeddings_16 = nn.Parameter(torch.zeros(1, 393, hidden_size))
+
+        # Base position embeddings (max size), will be interpolated in forward
+        max_patches = self.n_patches
+        self.position_embeddings = nn.Parameter(
+            torch.zeros(1, max_patches + 1, hidden_size)
+        )
         self.dropout = nn.Dropout(dropout_rate)
-        trunc_normal_(self.position_embeddings_8, mean=0.0, std=0.02, a=-2.0, b=2.0)
-        trunc_normal_(self.position_embeddings_16, mean=0.0, std=0.02, a=-2.0, b=2.0)
+        trunc_normal_(self.position_embeddings, mean=0.0, std=0.02, a=-2.0, b=2.0)
         self.apply(self._init_weights)
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, 32))
+
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, hidden_size))
+        trunc_normal_(self.cls_token, mean=0.0, std=0.02, a=-2.0, b=2.0)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -83,13 +92,27 @@ class PatchEmbeddingBlock(nn.Module):
         x = self.patch_embeddings(x)
         if self.pos_embed == "conv":
             x = x.flatten(2).transpose(-1, -2)
+
         cls_tokens = self.cls_token.expand(x.shape[0], -1, -1)
-        x = torch.cat((cls_tokens, x), dim=1)
-        print(x.shape)
-        if x.shape[1] == 37:
-            embeddings = x + self.position_embeddings_8
-        if x.shape[1] == 393:
-            embeddings = x + self.position_embeddings_16
+        x = torch.cat((cls_tokens, x), dim=1)  # (B, 1+N_patches, hidden)
+
+        num_tokens = x.shape[1]
+
+        # Dynamically interpolate position embeddings to match actual patch count
+        if num_tokens == self.position_embeddings.shape[1]:
+            embeddings = x + self.position_embeddings
+        else:
+            # Interpolate position embeddings (excluding CLS token)
+            cls_pe = self.position_embeddings[:, :1, :]           # (1, 1, hidden)
+            patch_pe = self.position_embeddings[:, 1:, :]          # (1, N_old, hidden)
+            patch_pe = F.interpolate(
+                patch_pe.transpose(1, 2),                          # (1, hidden, N_old)
+                size=num_tokens - 1,
+                mode='linear',
+                align_corners=False
+            ).transpose(1, 2)                                      # (1, N_new, hidden)
+            pe = torch.cat([cls_pe, patch_pe], dim=1)
+            embeddings = x + pe
+
         embeddings = self.dropout(embeddings)
         return embeddings
-

@@ -117,8 +117,8 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, lr_scheduler):
     sample_num = 0
     data_loader = tqdm(data_loader, file=sys.stdout)
     global m_8_f, m_16_f
-    m_8_f = torch.zeros(2, 2, 8).to(device)
-    m_16_f = torch.zeros(2, 2, 12).to(device)
+    m_8_f = None   # Will be set from first batch
+    m_16_f = None
 
     for step, data in enumerate(data_loader):
         images, labels = data
@@ -128,22 +128,23 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, lr_scheduler):
         pred_classes = torch.max(pred, dim=1)[1]
         accu_num += torch.eq(pred_classes, labels.to(device)).sum()
 
-        m_8 = m_8.type_as(m_8_f)
-        m_8_cos = torch.cosine_similarity(m_8_f, m_8, dim=2, eps=1e-08).to(device)
+        # IAC loss: cosine dissimilarity between adjacent batches' attention
+        if m_8_f is not None:
+            m_8_cos = torch.cosine_similarity(
+                m_8_f.float(), m_8.float(), dim=2, eps=1e-08
+            ).mean()
+            m_8_cos = 1 - m_8_cos
 
+            m_16_cos = torch.cosine_similarity(
+                m_16_f.float(), m_16.float(), dim=2, eps=1e-08
+            ).mean()
+            m_16_cos = 1 - m_16_cos
+        else:
+            m_8_cos = torch.tensor(0.0, device=device)
+            m_16_cos = torch.tensor(0.0, device=device)
 
-        m_8_cos = torch.mean(m_8_cos).to(device)
-        m_8_cos = 1 - m_8_cos
-        print('m_8_cos', m_8_cos)
-
-        m_16 = m_16.type_as(m_16_f)
-        m_16_cos = torch.cosine_similarity(m_16_f, m_16, dim=2, eps=1e-08).to(device)
-        m_16_cos = torch.mean(m_16_cos).to(device)
-        m_16_cos = 1 - m_16_cos
-        print('m_16_cos', m_16_cos)
-
-        m_8_f = m_8
-        m_16_f = m_16
+        m_8_f = m_8.detach()
+        m_16_f = m_16.detach()
 
         # loss = loss_function(pred, labels.to(device))
         loss = loss_function(pred, labels.to(device)) + 0.2 * m_8_cos + 0.2 * m_16_cos
@@ -165,7 +166,7 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, lr_scheduler):
         optimizer.zero_grad()
         lr_scheduler.step()
 
-    return accu_loss.item() / (step + 1), accu_num.item() / sample_num
+    return accu_loss.item() / (step + 1), accu_num.item() / sample_num, {}
 
 
 @torch.no_grad()
@@ -178,8 +179,8 @@ def evaluate(model, data_loader, device, epoch):
     accu_loss = torch.zeros(1).to(device)
 
     global m_8_f, m_16_f
-    m_8_f = torch.zeros(2, 2, 8).to(device)
-    m_16_f = torch.zeros(2, 2, 12).to(device)
+    m_8_f = None
+    m_16_f = None
 
     sample_num = 0
     data_loader = tqdm(data_loader, file=sys.stdout)
@@ -191,18 +192,22 @@ def evaluate(model, data_loader, device, epoch):
         pred, m_8, m_16 = model(images.to(device))
         pred_classes = torch.max(pred, dim=1)[1]
 
-        m_8 = m_8.type_as(m_8_f)
-        m_8_cos = torch.cosine_similarity(m_8_f, m_8, dim=2, eps=1e-08).to(device)
-        m_8_cos = torch.mean(m_8_cos).to(device)
-        m_8_cos = 1 - m_8_cos
+        if m_8_f is not None:
+            m_8_cos = torch.cosine_similarity(
+                m_8_f.float(), m_8.float(), dim=2, eps=1e-08
+            ).mean()
+            m_8_cos = 1 - m_8_cos
 
-        m_16 = m_16.type_as(m_16_f)
-        m_16_cos = torch.cosine_similarity(m_16_f, m_16, dim=2, eps=1e-08).to(device)
-        m_16_cos = torch.mean(m_16_cos).to(device)
-        m_16_cos = 1 - m_16_cos
+            m_16_cos = torch.cosine_similarity(
+                m_16_f.float(), m_16.float(), dim=2, eps=1e-08
+            ).mean()
+            m_16_cos = 1 - m_16_cos
+        else:
+            m_8_cos = torch.tensor(0.0, device=device)
+            m_16_cos = torch.tensor(0.0, device=device)
 
-        m_8_f = m_8
-        m_16_f = m_16
+        m_8_f = m_8.detach()
+        m_16_f = m_16.detach()
 
         accu_num += torch.eq(pred_classes, labels.to(device)).sum()
         # loss = loss_function(pred, labels.to(device))
@@ -228,9 +233,27 @@ def evaluate(model, data_loader, device, epoch):
     report = metrics.classification_report(all_label, all_preds, target_names=['0', '1'], digits=4)
     logger.info(report)
     print(report)
-    print("AUC:{:.4f}".format(metrics.roc_auc_score(all_label, all_preds)))
-    print("F1-Score:{:.4f}".format(f1_score(all_label, all_preds, average='macro')))
-    return accu_loss.item() / (step + 1), accu_num.item() / sample_num
+
+    auc = metrics.roc_auc_score(all_label, all_preds)
+    f1 = f1_score(all_label, all_preds, average='macro')
+    bacc = metrics.balanced_accuracy_score(all_label, all_preds)
+    # Sensitivity = recall for class 1, Specificity = recall for class 0
+    cm = metrics.confusion_matrix(all_label, all_preds)
+    tn, fp, fn, tp = cm.ravel() if cm.size == 4 else (0, 0, 0, 0)
+    sens = tp / (tp + fn) if (tp + fn) > 0 else 0
+    spec = tn / (tn + fp) if (tn + fp) > 0 else 0
+
+    metrics_dict = {
+        'acc': float(accu_num.item() / sample_num),
+        'auc': float(auc),
+        'f1': float(f1),
+        'bacc': float(bacc),
+        'sens': float(sens),
+        'spec': float(spec),
+    }
+    print(f"AUC:{auc:.4f}  F1:{f1:.4f}  bACC:{bacc:.4f}  Sens:{sens:.4f}  Spec:{spec:.4f}")
+
+    return accu_loss.item() / (step + 1), accu_num.item() / sample_num, metrics_dict
 
 
 def create_lr_scheduler(optimizer,

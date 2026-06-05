@@ -74,9 +74,10 @@ class MADFormer(nn.Module):
         self.bn = nn.BatchNorm3d(1)
         self.relu = nn.ReLU(inplace=True)
         self.fc = nn.Linear(32, 2)
-        self.pe_8 = PatchEmbeddingBlock(in_channels=1, img_size=128, patch_size=8, hidden_size=32, num_heads=4,
+        # img_size=32 is the BFEN output spatial dim (input 128 / stride 4)
+        self.pe_8 = PatchEmbeddingBlock(in_channels=1, img_size=32, patch_size=8, hidden_size=32, num_heads=4,
                                         pos_embed="conv")
-        self.pe_16 = PatchEmbeddingBlock(in_channels=1, img_size=128, patch_size=4, hidden_size=32, num_heads=4,
+        self.pe_16 = PatchEmbeddingBlock(in_channels=1, img_size=32, patch_size=4, hidden_size=32, num_heads=4,
                                          pos_embed="conv")
         # self.fc_16 = nn.Linear(129, 17)
 
