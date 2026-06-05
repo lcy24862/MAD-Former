@@ -16,7 +16,24 @@ DEVICE="${DEVICE:-cuda:0}"
 DATA_DIR="data"
 OUTPUT_DIR="./output"
 EPOCHS=200
+
+# Auto-detect GPU VRAM to set batch size
 BATCH_SIZE=2
+if command -v nvidia-smi &> /dev/null; then
+    VRAM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader 2>/dev/null | head -1 | sed 's/[^0-9]//g' || echo "0")
+    VRAM_MB=${VRAM_MB:-0}
+    if [ "$VRAM_MB" -ge 30000 ] 2>/dev/null; then
+        BATCH_SIZE=8
+        echo "[INFO] 32GB+ VRAM (RTX 5090) → batch_size=$BATCH_SIZE"
+    elif [ "$VRAM_MB" -ge 20000 ] 2>/dev/null; then
+        BATCH_SIZE=4
+        echo "[INFO] 24GB VRAM → batch_size=$BATCH_SIZE"
+    else
+        echo "[INFO] VRAM=$VRAM_MB MB → batch_size=$BATCH_SIZE"
+    fi
+else
+    echo "[INFO] No GPU detected → batch_size=$BATCH_SIZE"
+fi
 
 DRY_RUN=false
 RESUME_FLAG="--resume"
@@ -29,6 +46,7 @@ for arg in "$@"; do
         --resume)    RESUME_FLAG="--resume" ;;
         --device=*)  DEVICE="${arg#*=}" ;;
         --gpu=*)     DEVICE="cuda:${arg#*=}" ;;
+        --batch-size=*) BATCH_SIZE="${arg#*=}" ;;
     esac
 done
 
