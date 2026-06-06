@@ -37,6 +37,7 @@ fi
 
 DRY_RUN=false
 RESUME_FLAG="--resume"
+PATIENCE=25
 
 # ---- Parse args ----
 for arg in "$@"; do
@@ -47,6 +48,8 @@ for arg in "$@"; do
         --device=*)  DEVICE="${arg#*=}" ;;
         --gpu=*)     DEVICE="cuda:${arg#*=}" ;;
         --batch-size=*) BATCH_SIZE="${arg#*=}" ;;
+        --epochs=*)  EPOCHS="${arg#*=}" ;;
+        --patience=*) PATIENCE="${arg#*=}" ;;
     esac
 done
 
@@ -85,6 +88,8 @@ echo "==========================================================================
 echo " Experiments: ${#EXPERIMENTS[@]} tasks × ${#FOLDS[@]} folds = $TOTAL runs"
 echo " Device:      $DEVICE"
 echo " Epochs:      $EPOCHS"
+echo " Patience:    $PATIENCE"
+echo " Batch size:  $BATCH_SIZE"
 echo " Data dir:    $DATA_DIR"
 echo " Output dir:  $OUTPUT_DIR"
 echo " Resume:      $RESUME_FLAG"
@@ -98,7 +103,7 @@ if $DRY_RUN; then
         read -r DATASET TASK <<< "$entry"
         DATA_PATH="$DATA_DIR/$DATASET"
         for FOLD in "${FOLDS[@]}"; do
-            echo "  python train.py --dataset $DATASET --task $TASK --fold $FOLD --data-dir $DATA_PATH --device $DEVICE $RESUME_FLAG"
+            echo "  python train.py --dataset $DATASET --task $TASK --fold $FOLD --data-dir $DATA_PATH --device $DEVICE --epochs $EPOCHS --batch-size $BATCH_SIZE --patience $PATIENCE $RESUME_FLAG"
         done
     done
     echo ""
@@ -141,6 +146,7 @@ for entry in "${EXPERIMENTS[@]}"; do
             --device "$DEVICE" \
             --epochs "$EPOCHS" \
             --batch-size "$BATCH_SIZE" \
+            --patience "$PATIENCE" \
             $RESUME_FLAG
 
         EXIT_CODE=$?

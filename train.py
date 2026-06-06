@@ -119,12 +119,19 @@ def main(args):
     result_json_path = os.path.join(result_dir, f"{exp_name}.json")
     start_epoch = 0
     best_acc = 0.
+    best_val_loss = float('inf')
+    patience_counter = 0
 
     if args.resume and os.path.exists(checkpoint_path):
         print(f"[Resume] Loading checkpoint from {checkpoint_path}")
         start_epoch, best_acc = load_checkpoint(checkpoint_path, model, optimizer, lr_scheduler)
+        # Also restore best_val_loss and patience_counter if saved
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        best_val_loss = checkpoint.get('best_val_loss', float('inf'))
+        patience_counter = checkpoint.get('patience_counter', 0)
         start_epoch += 1
-        print(f"[Resume] Resuming from epoch {start_epoch}, best_acc={best_acc:.4f}")
+        print(f"[Resume] Resuming from epoch {start_epoch}, best_acc={best_acc:.4f}, "
+              f"best_val_loss={best_val_loss:.4f}, patience={patience_counter}/{args.patience}")
     elif os.path.exists(result_json_path):
         print(f"[Skip] Results already exist: {result_json_path}")
         tb_writer.close()
@@ -146,11 +153,26 @@ def main(args):
         tb_writer.add_scalar(tags[3], val_acc, epoch)
         tb_writer.add_scalar(tags[4], optimizer.param_groups[0]["lr"], epoch)
 
+        # Track best model (by val_acc)
         is_best = val_acc > best_acc
         if is_best:
             best_acc = val_acc
             torch.save(model.state_dict(), best_model_path)
-            print(f"[Fold {fold}] New best: {best_model_path} (acc={best_acc:.4f})")
+            print(f"[Fold {fold}] Best model (acc={best_acc:.4f}) at epoch {epoch}")
+
+        # Early stopping based on val_loss
+        if val_loss < best_val_loss - 1e-4:
+            best_val_loss = val_loss
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            print(f"[Fold {fold}] Patience: {patience_counter}/{args.patience} "
+                  f"(best_val_loss={best_val_loss:.4f}, current={val_loss:.4f})")
+
+        if patience_counter >= args.patience:
+            print(f"[Fold {fold}] Early stopping at epoch {epoch} "
+                  f"(no improvement for {args.patience} epochs)")
+            break
 
         # Save checkpoint for resume
         save_checkpoint({
@@ -159,6 +181,8 @@ def main(args):
             'optimizer_state_dict': optimizer.state_dict(),
             'scheduler_state_dict': lr_scheduler.state_dict(),
             'best_acc': best_acc,
+            'best_val_loss': best_val_loss,
+            'patience_counter': patience_counter,
         }, checkpoint_path)
 
     # ---- Test evaluation ----
@@ -204,10 +228,12 @@ if __name__ == '__main__':
                         help='Root output directory for weights/results/logs')
 
     # Training
-    parser.add_argument('--epochs', type=int, default=200)
-    parser.add_argument('--batch-size', type=int, default=2)
+    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--batch-size', type=int, default=8)
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--wd', type=float, default=5e-2)
+    parser.add_argument('--patience', type=int, default=25,
+                        help='Early stopping patience (epochs without val_loss improvement)')
 
     # Misc
     parser.add_argument('--resume', action='store_true', default=True,
