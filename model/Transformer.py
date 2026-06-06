@@ -123,7 +123,6 @@ class CalAttention(nn.Module):
         )
 
         _, M_top = self.cal_q(q, k)
-        print('M_top',M_top)
         return M_top
 
 

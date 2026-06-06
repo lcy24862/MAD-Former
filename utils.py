@@ -129,14 +129,17 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, lr_scheduler):
         accu_num += torch.eq(pred_classes, labels.to(device)).sum()
 
         # IAC loss: cosine dissimilarity between adjacent batches' attention
+        # Handle variable batch size (last batch may be smaller)
         if m_8_f is not None:
+            min_bs_8 = min(m_8_f.shape[0], m_8.shape[0])
             m_8_cos = torch.cosine_similarity(
-                m_8_f.float(), m_8.float(), dim=2, eps=1e-08
+                m_8_f[:min_bs_8].float(), m_8[:min_bs_8].float(), dim=2, eps=1e-08
             ).mean()
             m_8_cos = 1 - m_8_cos
 
+            min_bs_16 = min(m_16_f.shape[0], m_16.shape[0])
             m_16_cos = torch.cosine_similarity(
-                m_16_f.float(), m_16.float(), dim=2, eps=1e-08
+                m_16_f[:min_bs_16].float(), m_16[:min_bs_16].float(), dim=2, eps=1e-08
             ).mean()
             m_16_cos = 1 - m_16_cos
         else:
@@ -192,14 +195,17 @@ def evaluate(model, data_loader, device, epoch):
         pred, m_8, m_16 = model(images.to(device))
         pred_classes = torch.max(pred, dim=1)[1]
 
+        # Handle variable batch size (last batch may be smaller)
         if m_8_f is not None:
+            min_bs_8 = min(m_8_f.shape[0], m_8.shape[0])
             m_8_cos = torch.cosine_similarity(
-                m_8_f.float(), m_8.float(), dim=2, eps=1e-08
+                m_8_f[:min_bs_8].float(), m_8[:min_bs_8].float(), dim=2, eps=1e-08
             ).mean()
             m_8_cos = 1 - m_8_cos
 
+            min_bs_16 = min(m_16_f.shape[0], m_16.shape[0])
             m_16_cos = torch.cosine_similarity(
-                m_16_f.float(), m_16.float(), dim=2, eps=1e-08
+                m_16_f[:min_bs_16].float(), m_16[:min_bs_16].float(), dim=2, eps=1e-08
             ).mean()
             m_16_cos = 1 - m_16_cos
         else:
