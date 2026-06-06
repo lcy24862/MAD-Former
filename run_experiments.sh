@@ -56,6 +56,11 @@ done
 # ---- Experiment Matrix ----
 # Format: "dataset task"
 EXPERIMENTS=(
+    # 18F-FDG (先跑)
+    "18F-FDG AD_HC"
+    "18F-FDG EMCI_LMCI"
+    "18F-FDG HC_MCI"
+    "18F-FDG HC_ALL_MCI"
     # 18F-AV45
     "18F-AV45 AD_HC"
     "18F-AV45 EMCI_LMCI"
@@ -66,11 +71,6 @@ EXPERIMENTS=(
     "18F-AV1451 HC_MCI"
     # 18F-FBB
     "18F-FBB HC_MCI"
-    # 18F-FDG
-    "18F-FDG AD_HC"
-    "18F-FDG EMCI_LMCI"
-    "18F-FDG HC_MCI"
-    "18F-FDG HC_ALL_MCI"
 )
 
 FOLDS=(0 1 2 3 4)
